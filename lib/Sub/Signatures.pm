@@ -1,6 +1,6 @@
 package Sub::Signatures;
 $REVISION = '$Id: Signatures.pm,v 1.3 2004/12/05 21:19:33 ovid Exp $';
-$VERSION  = '0.01';
+$VERSION  = '0.1';
 
 use 5.006;
 use strict;
@@ -94,15 +94,43 @@ sub _make_signature {
 }
 
 FILTER_ONLY code => sub {
-    while (/(sub\s*(\w+)\s*\(([^)]+)\)[^{]*{)/) {
+    while (/(sub\s*(\w+)?\s*\(([^)]+)\)[^{]*{)/) {
         my ($sub_with_sig, $oldname, $parameters) = ($1, $2, $3);
         next unless $parameters; # don't process them if they don't use them
+
         # the following line doesn't work.  For some reason, using prototypes
         # with this module causes an infinite while loop here.
         # I'm probably overlooking something really obvious. 
         # next if $parameters =~ /^\s*[\\\$@%*;\[\]]*\s*$/; # ignore prototypes
-        my ($newname, $newparams, $count) = $signature->($oldname, $parameters);
-        $SIG{$CALLPACK}{$oldname}{$count} = $newname;
+
+        my ($newname, $newparams, $count);
+        if ($oldname) { 
+            # named sub
+            ($newname, $newparams, $count) = $signature->($oldname, $parameters);
+            if (exists $SIG{$CALLPACK}{$oldname} && exists $SIG{$CALLPACK}{$oldname}{$count}) {
+                my $dup_method = $STRICT{$CALLPACK}
+                    ? exists $SIG{$CALLPACK}{$oldname}{$count}{$newname}
+                    : 1;
+                if ($dup_method) {
+                    my $args = $newname;
+                    $args =~ s/^_\w+_//;
+                    $args =~ s/_/, /g;
+                    # how do I get the line number?
+                    die "$oldname($args) redefined in package '$CALLPACK'";
+                }
+            }
+            if ($STRICT{$CALLPACK}) {
+                $SIG{$CALLPACK}{$oldname}{$count}{$newname} = 1;
+            }
+            else {
+                $SIG{$CALLPACK}{$oldname}{$count} = $newname;
+            }
+        }
+        else { 
+            # anonymous sub
+            $newname   = '';
+            $newparams = $parameters;
+        }
         s/\Q$sub_with_sig\E/sub $newname { my ($newparams) = \@_;/;
     }
     print $_ if $ENV{DEBUG};
@@ -282,7 +310,8 @@ signatures B<still behave normally>. You will still be able to do this:
 The default behavior of C<Sub::Signatures> is to assume that signatures are on
 subroutines.  If you use this with OO programming and have methods instead of
 functions, you must specify C<methods> mode.  This is because the type of the
-first argument cannot be guaranteed at compile time.
+first argument cannot be guaranteed at compile time and we have to be able to
+dispatch to a parent class if the method isn't found in the current class.
 
  package ClassA;
  
@@ -315,17 +344,61 @@ Currently supported features:
 
 =item * Methods
 
+ use Sub::Signatures 'methods';
+
 =item * Subroutines
+
+ use Sub::Signatures;
 
 =item * Optional strong typing via the C<ref> function
 
+ use Sub::Signatures 'strict';
+
 =item * Exporting
+
+ use base 'Exporter';
+ use Sub::Signatures;
+ our @EXPORT_OK = qw/foo/;
+
+ sub foo($bar) {...}
+
+ sub foo($bar, $baz) {
+     ...
+ }
+
+=item * No duplicate signatures
+
+In loose mode:
+
+ use Sub::Signatures;
+ sub foo($bar) {}
+ sub foo($baz) {} # won't compile
+ 
+In strict mode:
+
+ use Sub::Signatures 'strict';
+ sub foo($bar) {}
+ sub foo(HASH $bar) {} # good so far because the first is a SCALAR
+ sub foo(HASH $baz) {} # This fails because we can't disambiguate them
 
 =item * Inheritance
 
-=item * Useful error message
+This works, but see caveats below.
 
-=back
+=item * Anonymous subroutines
+
+These mostly work, but there are limitations.  Signature-based dispatch does
+not make much sense in this context, so it's not available.  The only point is
+to be able to declare your anonymous subs with variables:
+
+ my $thingy = sub ($foo, $bar) { ... };
+
+Unlike named subs, the number of arguments is not checked, so this is
+equivalent to:
+
+ my $thingy = sub { my ($foo, $bar) = @_; ... };
+
+=item * Useful error messages
 
 The error messages bear some explaining.  If your code cannot find the correct
 method to dispatch to, you'll see something like this:
@@ -345,6 +418,8 @@ message because this seems counter-intuitive:
 It looks like there's really only one argument (even though we know better)
 and for various reasons, the code is a bit cleaner when the error message is
 handled this way.
+
+=back
 
 =head1 BUGS AND LIMITATIONS
 
@@ -439,15 +514,61 @@ If you need that behavior, don't use a signature for that subroutine or method.
 
 There is no support for them.  Patches welcome.
 
-=item * Anonymous functions
-
-I may add this in the future, but obviously I<without> signature based
-dispatching.  Instead, being able to declare the signature will probably be all
-it will do:
-
-  my $foo = sub ($bar, $baz) { return [$bar, $baz] };
-
 =back
+
+=head1 HOW THIS WORKS
+
+In a nutshell, each subroutine is renamed with a unique, signature-based name
+and a sub with its original name figures out how to dispatch to it.  It loosely
+works like this:
+
+ package Some::Package;
+
+ sub foo($bar) {
+     return [$bar];
+ }
+ 
+ sub foo($bar, HASH $baz) {
+     return exists $baz->{$bar};
+ }
+ 
+In loose mode, this becomes:
+
+ # note that only the number of arguments is checked
+
+ package Some::Package;
+
+ sub foo {
+     goto &_foo_SCALAR if 1 == @_;
+     goto &_foo_SCALAR_HASH if 2 == @_;
+     # die with a useful error message
+ }
+
+ sub _foo_SCALAR { my ($bar) = @_;
+     return [$bar];
+ }
+
+ sub _foo_SCALAR_HASH { my ($bar, $baz) = @_;
+     return exists $baz->{$bar};
+ }
+
+In strict the only difference is in how the dispatch subroutine is created.
+
+ sub foo {
+     my $s = Sub::Signatures::_make_signature('Some::Package', @_);
+     no strict 'refs';
+     goto &{"_foo_$s"} if defined &{"_foo_$s"};
+     # die with a useful error message
+ }
+
+The C<_make_signature> subroutine returns a signature like "SCALAR_HASH_DBI",
+etc., thus allowing for the type checking.
+
+There's a bit more magic involved when it comes to methods, particulary with
+trying to call an inherited method if one is not found in the current package.
+However, this should give you a rough idea of what's going on and also give you
+fair warning that deliberately naming subs things like
+C<_subname_TYPE_TYPE_ETC> is a bad thing.
 
 =head1 EXPORT
 

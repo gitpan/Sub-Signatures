@@ -1,4 +1,4 @@
-Sub::Signatures version 0.01
+Sub::Signatures version 0.1
 =====================
 
 INSTALLATION
@@ -14,7 +14,8 @@ DEPENDENCIES
 
 This module requires these other modules and libraries:
 
-  blah blah blah
+ Filter::Simple
+ Test::Exception (only for the tests, of course)
 
 COPYRIGHT AND LICENCE
 

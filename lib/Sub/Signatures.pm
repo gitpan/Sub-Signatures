@@ -1,6 +1,6 @@
 package Sub::Signatures;
 $REVISION = '$Id: Signatures.pm,v 1.3 2004/12/05 21:19:33 ovid Exp $';
-$VERSION  = '0.1';
+$VERSION  = '0.11';
 
 use 5.006;
 use strict;
@@ -29,7 +29,7 @@ sub import {
 my $signature = sub {
     my ($subname, $parameters) = @_;
     my @args = 
-        map { /\s*(\w*)\s*(\$\w+)/; [$1 || 'SCALAR', $2] }
+        map { /\s*(\S*)\s*(\$\w+)/; [$1 || 'SCALAR', $2] }
         split /(?:,|=>)/ => $parameters;
     $args[0][0] = 'SCALAR' if $METHODS{$CALLPACK}; # ignore the type of the first argument
     my $types   = join '_'  => map { $_->[0] } @args;
@@ -82,6 +82,7 @@ my $install_subs = sub {
             no warnings 'redefine';
             my $installed_sub = "package $pack;\nsub $sub {\n$body}";
             eval $installed_sub;
+            warn "Installing &${pack}::$sub\n----------\n$installed_sub\n----------\n" if !$@ &&$ENV{DEBUG};
             die "Failed to install &${pack}::$sub\n----------\n$installed_sub\n----------\nReason:  $@" if $@;
         }
     }
@@ -94,6 +95,7 @@ sub _make_signature {
 }
 
 FILTER_ONLY code => sub {
+    warn "Calling package:  $CALLPACK ****" if $ENV{DEBUG};
     while (/(sub\s*(\w+)?\s*\(([^)]+)\)[^{]*{)/) {
         my ($sub_with_sig, $oldname, $parameters) = ($1, $2, $3);
         next unless $parameters; # don't process them if they don't use them
@@ -133,12 +135,12 @@ FILTER_ONLY code => sub {
         }
         s/\Q$sub_with_sig\E/sub $newname { my ($newparams) = \@_;/;
     }
+    $make_subs->();
+    $install_subs->();
     print $_ if $ENV{DEBUG};
 };
 
-CHECK {
-    $make_subs->();
-    $install_subs->();
+INIT {
 }
 
 1;

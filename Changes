@@ -1,5 +1,10 @@
 Revision history for Perl extension Sub::Signatures.
 
+0.11  Mon Dec 6, 2004
+      * whoops!  Fixed serious bug where we did not allow classnames
+        signatures to have colons.
+      * improved debugging code.
+
 0.1   Sun Dec 5, 2004
       * Updated the docs.
       * Made anonymous functions work.

@@ -1,4 +1,5 @@
 use ExtUtils::MakeMaker;
+use 5.006;
 WriteMakefile(
     'NAME'		    => 'Sub::Signatures',
     'VERSION_FROM'	=> 'lib/Sub/Signatures.pm',

@@ -11,9 +11,11 @@ t/30typed_sigs.t
 t/40loose_methods.t
 t/50strict_methods.t
 t/60true_objects.t
+t/65classnames.t
 t/70subclassing.t
 t/80export.t
 t/90prototypes.t
 t/test_lib/ClassA.pm
+t/test_lib/ClassA/Subclass.pm
 t/test_lib/ClassB.pm
 t/test_lib/ExportTest.pm

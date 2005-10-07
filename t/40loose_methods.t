@@ -15,9 +15,9 @@ sub foo($class, $bar) {
     $bar;
 }
 
-ok defined &_foo_SCALAR_SCALAR, 
+ok defined &__foo_2, 
     'We can have subs with one argument';
-is_deeply __PACKAGE__->_foo_SCALAR_SCALAR({this => 'one'}), {this => 'one'},    
+is_deeply __PACKAGE__->__foo_2({this => 'one'}), {this => 'one'},    
     '... and it should behave as expected';
 
 is_deeply __PACKAGE__->foo({this => 'one'}), {this => 'one'},    
@@ -27,9 +27,9 @@ sub foo($class, $bar, $baz) {
     return [$bar, $baz];
 }
 
-ok defined &_foo_SCALAR_SCALAR_SCALAR,
+ok defined &__foo_3,
     '... and we can recreate the sub with a different signature';
-is_deeply __PACKAGE__->_foo_SCALAR_SCALAR_SCALAR(1,2), [1,2],
+is_deeply __PACKAGE__->__foo_3(1,2), [1,2],
     '... and call the correct sub based upon the number of arguments';
 is_deeply __PACKAGE__->foo(1,2), [1,2],
     '... even if we call it by its original name';

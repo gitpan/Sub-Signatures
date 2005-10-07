@@ -2,25 +2,33 @@ package ClassA;
 
 use strict;
 use warnings;
-use Sub::Signatures qw/strict methods/;
+use Sub::Signatures qw/methods/;
 
 sub new { bless {} => shift }
 
-sub foo($class, ARRAY $bar) {
-    return sprintf "arrayref with %d elements" => scalar @$bar;
-}
-
-sub foo($class, HASH $bar) {
-    $bar->{this} = 1; 
-    $bar;
+sub foo($class, $bar) {
+    if ( 'ARRAY' eq ref $bar ) {
+        return sprintf "arrayref with %d elements" => scalar @$bar;
+    }
+    elsif ( 'HASH' eq ref $bar ) {
+        $bar->{this} = 1; 
+        return $bar;
+    }
+    else {
+        die "Must be array or hash";
+    }
 }
 
 sub bar($class, $bar) {
     $bar;
 }
 
-sub match($class, ARRAY $bar) {
-    return $bar;
+sub bar(fallback) {
+    return ['fallback', @_];
+}
+
+sub match($class, $bar) {
+    $bar;
 }
 
 1;

@@ -1,6 +1,6 @@
 package Sub::Signatures;
 $REVISION = '$Id: Signatures.pm,v 1.3 2004/12/05 21:19:33 ovid Exp $';
-$VERSION  = '0.11';
+$VERSION  = '0.20';
 
 use 5.006;
 use strict;
@@ -10,16 +10,14 @@ use Filter::Simple;
 my $CALLPACK;
 my %SIG;
 
-my %STRICT;
 my %METHODS;
 
-sub import { 
+sub import {
     my $class = shift;
     my %props = map { $_ => 1 } @_;
     ($CALLPACK) = caller;
-    $STRICT{$CALLPACK}  = exists $props{strict}  ? 1 : 0;
     $METHODS{$CALLPACK} = exists $props{methods} ? 1 : 0;
-    if ($ENV{DEBUG}) {
+    if ( $ENV{SS_DEBUG} ) {
         require Data::Dumper;
         Data::Dumper->import;
         $Data::Dumper::Indent = 1;
@@ -27,117 +25,114 @@ sub import {
 }
 
 my $signature = sub {
-    my ($subname, $parameters) = @_;
-    my @args = 
-        map { /\s*(\S*)\s*(\$\w+)/; [$1 || 'SCALAR', $2] }
-        split /(?:,|=>)/ => $parameters;
-    $args[0][0] = 'SCALAR' if $METHODS{$CALLPACK}; # ignore the type of the first argument
-    my $types   = join '_'  => map { $_->[0] } @args;
-    $parameters = join ', ' => map { $_->[1] } @args;
-    return ("_${subname}_$types", $parameters, scalar @args);
+    my ( $subname, $parameters ) = @_;
+    if ( 'fallback' eq $parameters ) {
+        return ( "_${subname}_fallback", '', 0 );
+    }
+    else {
+        my @args =
+          map { /\s*(\S*)\s*(\$\w+)/; [ $1 || 'SCALAR', $2 ] }
+          split /(?:,|=>)/ => $parameters;
+        my $count = @args;
+        $parameters = join ', ' => map { $_->[1] } @args;
+        return ( "__${subname}_$count", $parameters, scalar @args );
+    }
 };
 
 my $make_subs = sub {
-    while (my ($pack, $subs) = each %SIG) {
-        while (my ($sub, $counts) = each %$subs) {
-            while (my ($count, $target) = each %$counts) {
+    while ( my ( $pack, $subs ) = each %SIG ) {
+        while ( my ( $sub, $counts ) = each %$subs ) {
+            my @build =
+              sort { $a->[1] cmp $b->[1] }
+              map { [ $_ => $counts->{$_} ] } keys %$counts;
+            foreach my $item (@build) {
+                my ( $count, $target ) = @$item;
+                next if 0 <= index +( $subs->{$sub}{body} || '' ), $target;
                 next if 'body' eq $count;
-                if ($STRICT{$pack}) {
-                    next if $subs->{$sub}{body};
-                    $subs->{$sub}{body}  = <<"    END_SUB";
-    my \$s = Sub::Signatures::_make_signature('$pack', \@_);
-    no strict 'refs';
-    goto &{"_${sub}_\$s"} if defined &{"_${sub}_\$s"};
-    END_SUB
-                    if ($METHODS{$pack}) {
-                        $subs->{$sub}{body} .= <<"    END_SUB";
-    if (my \$method = UNIVERSAL::can(\$_[0], "_${sub}_\$s")) {
-        goto \$method;
-    }
-    END_SUB
-                    }
-                }
-                else {
-                    $subs->{$sub}{body} ||= '';
-                    $subs->{$sub}{body}  .= "    goto \&$target if $count == \@_;\n";
-                }
+                $subs->{$sub}{body} ||= '';
+                $subs->{$sub}{body} .= $target =~ /_fallback$/
+                  ? "    goto \&$target;\n"
+                  : "    goto \&$target if $count == \@_;\n";
             }
         }
     }
-    print Dumper(%SIG) if $ENV{DEBUG};
+    print Dumper(%SIG) if $ENV{SS_DEBUG};
 };
 
 my $install_subs = sub {
-    while (my ($pack, $subs) = each %SIG) {
-        foreach my $sub (keys %$subs) {
+    while ( my ( $pack, $subs ) = each %SIG ) {
+        foreach my $sub ( keys %$subs ) {
             my $body = $subs->{$sub}{body};
             my $type = $METHODS{$pack} ? 'method' : 'sub';
-            $body   .= <<"    END_BODY";
+            unless ( $body =~ /_fallback;/ ) {
+                $body .= <<"                END_BODY";
     # if we got to here, there was no $type to dispatch to
     require Carp;
     shift if 'method' eq '$type';
     my \$types = join ', ' => map { ref \$_ || 'SCALAR' } \@_;
     Carp::croak "Could not find a $type matching your signature: $sub(\$types)";
-    END_BODY
+                END_BODY
+            }
             no warnings 'redefine';
             my $installed_sub = "package $pack;\nsub $sub {\n$body}";
             eval $installed_sub;
-            warn "Installing &${pack}::$sub\n----------\n$installed_sub\n----------\n" if !$@ &&$ENV{DEBUG};
-            die "Failed to install &${pack}::$sub\n----------\n$installed_sub\n----------\nReason:  $@" if $@;
+            warn
+"Installing &${pack}::$sub\n----------\n$installed_sub\n----------\n"
+              if !$@ && $ENV{SS_DEBUG};
+            die
+"Failed to install &${pack}::$sub\n----------\n$installed_sub\n----------\nReason:  $@"
+              if $@;
         }
     }
 };
 
-sub _make_signature {
-    my ($package, @args) = @_;
-    $args[0] = '' if $METHODS{$package}; # ignore the type of the first argument
-    return join '_' => map { ref $_ || 'SCALAR' } @args;
-}
-
+# each regex can capture itself!
+my $sub_name_re   = qr/([[:alpha:]][[:word:]]*)/;
+my $parameters_re = qr/\(([^)]+)\)/;
 FILTER_ONLY code => sub {
-    warn "Calling package:  $CALLPACK ****" if $ENV{DEBUG};
-    while (/(sub\s*(\w+)?\s*\(([^)]+)\)[^{]*{)/) {
-        my ($sub_with_sig, $oldname, $parameters) = ($1, $2, $3);
-        next unless $parameters; # don't process them if they don't use them
+    warn "Calling package:  $CALLPACK ****" if $ENV{SS_DEBUG};
+    while (/(sub\s*$sub_name_re?\s*$parameters_re[^{]*{)/) {
+        my ( $sub_with_sig, $oldname, $parameters ) = ( $1, $2, $3 );
 
         # the following line doesn't work.  For some reason, using prototypes
         # with this module causes an infinite while loop here.
-        # I'm probably overlooking something really obvious. 
+        # I'm probably overlooking something really obvious.
         # next if $parameters =~ /^\s*[\\\$@%*;\[\]]*\s*$/; # ignore prototypes
 
-        my ($newname, $newparams, $count);
-        if ($oldname) { 
+        my ( $newname, $newparams, $count );
+        if ($oldname) {
+
             # named sub
-            ($newname, $newparams, $count) = $signature->($oldname, $parameters);
-            if (exists $SIG{$CALLPACK}{$oldname} && exists $SIG{$CALLPACK}{$oldname}{$count}) {
-                my $dup_method = $STRICT{$CALLPACK}
-                    ? exists $SIG{$CALLPACK}{$oldname}{$count}{$newname}
-                    : 1;
-                if ($dup_method) {
-                    my $args = $newname;
-                    $args =~ s/^_\w+_//;
-                    $args =~ s/_/, /g;
-                    # how do I get the line number?
-                    die "$oldname($args) redefined in package '$CALLPACK'";
-                }
+            ( $newname, $newparams, $count ) =
+              $signature->( $oldname, $parameters );
+            if (   exists $SIG{$CALLPACK}{$oldname}
+                && exists $SIG{$CALLPACK}{$oldname}{$count} )
+            {
+                my $args = $newname;
+                $args =~ s/^_\w+_//;
+                $args =~ s/_/, /g;
+
+                # how do I get the line number?
+                die "$oldname($args) redefined in package '$CALLPACK'";
             }
-            if ($STRICT{$CALLPACK}) {
-                $SIG{$CALLPACK}{$oldname}{$count}{$newname} = 1;
-            }
-            else {
-                $SIG{$CALLPACK}{$oldname}{$count} = $newname;
-            }
+            $SIG{$CALLPACK}{$oldname}{$count} = $newname;
         }
-        else { 
+        else {
+
             # anonymous sub
             $newname   = '';
             $newparams = $parameters;
         }
-        s/\Q$sub_with_sig\E/sub $newname { my ($newparams) = \@_;/;
+        if ($newparams) {
+            s/\Q$sub_with_sig\E/sub $newname { my ($newparams) = \@_;/;
+        }
+        else {
+            s/\Q$sub_with_sig\E/sub $newname {/;
+        }
     }
     $make_subs->();
     $install_subs->();
-    print $_ if $ENV{DEBUG};
+    print $_ if $ENV{SS_DEBUG};
 };
 
 INIT {
@@ -167,15 +162,33 @@ Sub::Signatures - Use proper signatures for subroutines, including dispatching.
   foo(2,3);   # prints 2, 3
   foo(2,3,4); # fatal error
 
+  sub bar($var) {
+    print "$var\n";
+  }
+
+  sub bar(fallback) {
+    my ($this, $that) = @_;
+    print "fallback $this, $that\n";
+  }
+  
+  bar(1);   # prints 1
+  bar(2,3); # prints fallback 2, 3
+  bar(2,3);
+
 =head1 ABSTRACT
 
- Signature based method overloading in Perl.  Strong typing optional.
+ Signature based method overloading in Perl.
 
 =head1 DESCRIPTION
+
+B<WARNING>:  Not backwards-compatible to Sub::Signatures 0.11.
 
 One of the strongest complaints about Perl is its poor argument handling.
 Simply passing everything in the C<@_> array is a serious limitation.  This
 module aims to rectify that.
+
+With this module, we an specify subroutine signatures and automatically 
+dispatch on the number of arguments.
 
 We often see things like this in Perl code:
 
@@ -196,22 +209,13 @@ The intent here is to allow someone to do this:
   my $name = $person->name; # fetch the name
   $person->name('Ovid');    # set the name
 
-But what happens when someone does this?
+Most modern programming languages have multi-method dispatching.   The intent
+of C<Sub::Signatures> is to fix this problem painlessly by allowing signature
+based method dispatch. 
 
-  my $name = Name->new('Ovid');
-  $person->name($name); # this fails
+Here's how it works:
 
-Or this?
-
-  $person->name(qw/Publius Ovidius Naso/);
-
-All of those seem reasonable but Perl will silently DWIDM (Do What I Don't
-Mean) and this can be difficult to debug.  Most modern programming languages do
-not have this problem (neither will Perl 6.)   The intent of C<Sub::Signatures>
-is to fix this problem painlessly by allowing signature based method dispatch.
-Here's how you could fix this:
-
-  use Sub::Signatures qw/strict methods/;
+  use Sub::Signatures qw/methods/;
 
   # ...
 
@@ -219,111 +223,67 @@ Here's how you could fix this:
     return $self->{name};
   }
 
-  sub name ($self, $name) { # without a specific type, it assumes a scalar
+  sub name ($self, $name) { 
     $self->{name} = $name;
   }
 
-  sub name ($self, Name $name) { # must have a Name object
-    $self->{name} = $name->as_string;
+Later:
+
+  print $object->name;  # prints current name
+  $object->name($name); # sets current name
+  $object->name(qw/Publius Ovidius/); # fatal runtime error
+
+B<NOTE>:  all arguments in signatures must be scalars.  Perl does not handle
+flattening of hashes or arrays very gracefully.
+
+=head2 Fallback
+
+For a group of subroutines or methods with the same name but different
+arguments, calling this subroutine with a different number of arguments from
+those available in any signature will cause a fatal runtime error.  If this is
+too restrictive, use a 'fallback' subroutine or method.
+
+  sub name ($self) {
+    return $self->{name};
   }
 
-That allows all of the above methods except for the last one:
-
-  $person->name(qw/Publius Ovidius Naso/);
-
-That generates a fatal error because no C<name()> method had a matching
-signature.  You could make it work with this:
-
-  sub name ($self, $first, $middle, $last) {
-    ...
+  sub name ($self, $name) { 
+    $self->{name} = $name;
   }
 
-=head1 MODES
+  sub name(fallback) {
+    my ($self, @args) = @_;
+    $self->{name} = join ' ', @args;
+  }
 
-=head2 'loose' mode
+Later:
 
-By default C<Sub::Signatures> runs in C<loose> mode.  When in this mode,
-subroutines and methods are called based on the number of arguments, not the
-type.  This makes programming quick and easy:
-
- use Sub::Signatures;
-
- sub foo($bar) {
-     print $bar;
- }
-
- sub foo($bar, $baz) {
-     print "$baz, $bar";
- }
-
-=head2 'strict' mode
-
-What if a sub can take either an arrayref or a hashref?  Rather than have the
-sub figure out what to do, you can specify the type (as determined by the
-C<ref> function) of an argument in the argument list.  You do can do this with
-C<loose> mode, but the type will be ignored.  Instead, switch to C<strict> mode.
-
- use Sub::Signatures qw/strict/;
-
- sub foo(ARRAY $bar) {
-     print scalar @$bar;
- }
-
- sub foo(HASH $bar) {
-     print scalar keys %$bar;
- }
-
-If you do not specify a type for a variable in a signature, C<SCALAR> will be
-assumed.
-
- package Foo;
-
- use Sub::Signatures qw/strict/;
+  print $object->name;  # prints current name
+  $object->name($name); # sets current name
+  $object->name(qw/Publius Ovidius/); # sets name to 'Publius Ovidius'
  
- sub foo($bar) {
-     print $bar;
- }
+Note that forcing the programmer to explicitly label a subroutine as a
+'fallback' ensures that even if that subroutine is not located near any of the
+others with the same name, it's still clear to a maintenance programmer that
+the subroutine may be overloaded.
 
- # in another file:
-
- use Foo;
- Foo::bar("Ovid");     # prints 'Ovid'
- Foo::bar([qw/Ovid/]); # dies unless 'sub foo(ARRAY $bar) {}' exists.
-
-Of course, signatures can get quite long, too:
-
- sub foo(ARRAY $bar, HASH $baz, CGI $query) {
-     ...
- }
-
-Note the last argument in that list.  It means that C<$query> must be a CGI
-object.  Regrettably, C<Sub::Signatures> does not support allowing a subclass
-there, but it may in future releases.  This rather limits the utility if the
-class is not known at compile time.  However, note that subroutines without
-signatures B<still behave normally>. You will still be able to do this:
-
- sub foo {
-   my ($bar, $baz, $query) = @_;
-   ...
- }
-
-=head2 'methods' mode
+=head2 Using Methods
 
 The default behavior of C<Sub::Signatures> is to assume that signatures are on
 subroutines.  If you use this with OO programming and have methods instead of
-functions, you must specify C<methods> mode.  This is because the type of the
-first argument cannot be guaranteed at compile time and we have to be able to
-dispatch to a parent class if the method isn't found in the current class.
+functions, you must specify C<methods> mode.  This is because we have to be
+able to dispatch to a parent class if the method isn't found in the current
+class.
 
  package ClassA;
  
- use Sub::Signatures qw/strict methods/;
+ use Sub::Signatures qw/methods/;
  
- sub new($package, HASH $properties) { 
+ sub new($package, $properties) { 
     bless $properties => $package;
  }
  
- sub foo($class, ARRAY $bar) {
+ sub foo($class, $bar) {
      return sprintf "arrayref with %d elements" => scalar @$bar;
  }
  
@@ -352,10 +312,6 @@ Currently supported features:
 
  use Sub::Signatures;
 
-=item * Optional strong typing via the C<ref> function
-
- use Sub::Signatures 'strict';
-
 =item * Exporting
 
  use base 'Exporter';
@@ -370,22 +326,11 @@ Currently supported features:
 
 =item * No duplicate signatures
 
-In loose mode:
-
  use Sub::Signatures;
  sub foo($bar) {}
  sub foo($baz) {} # won't compile
  
-In strict mode:
-
- use Sub::Signatures 'strict';
- sub foo($bar) {}
- sub foo(HASH $bar) {} # good so far because the first is a SCALAR
- sub foo(HASH $baz) {} # This fails because we can't disambiguate them
-
 =item * Inheritance
-
-This works, but see caveats below.
 
 =item * Anonymous subroutines
 
@@ -423,11 +368,50 @@ handled this way.
 
 =back
 
+=head1 WHAT ABOUT TYPING?
+
+The first version of this alpha allowed optional strong typing by letting
+you specify the exact ref type each argument should be:
+
+ sub foo (ARRAY $bar, HASH $baz, CGI $query) {
+   ...
+ }
+
+Why did this go away?  There were several problems.  First, specifying the
+exact data type meant that I<isa> relationships were ignored.  However, if we
+were to check I<isa> relationships, this sometimes leads to problems with
+ambiguous method resolution.
+
+The real nail in the coffin was that C<CGI $query> parameter above.  What if
+we actually have a C<CGI::Simple> object passed in instead?  It almost
+completely conforms to the C<CGI> interface.  If it does what we want, the type
+checking guarantees that that this method will fail for no good reason.
+
+However, no argument checking is a bad thing.  What we're really interested in
+is whether or not a given argument is capable of providing what we need, not
+whether or not it's a given type.  This puts your author in a bind.  Objects
+which are unrelated by inheritance but present the same behaviors are known as
+I<allomorphic>.  
+
+Allomorphism, despite the funny name, is something Perl programmers use all the
+time without being aware of what it's called.  However, to add allomorphism
+support to this module would complicate it quite a bit.  Thus, to keep things
+as simple as possible, we restrict ourselves to dispatching on the number of
+arguments.  Thus, you, the programmer, will still need to validate the
+different types and/or capabilities of the arguments you pass in.
+
+Sorry about that :/
+
+If you prefer, you can still list the data type before the argument:
+
+  sub foo (ARRAY $bar) {...}
+
+However, the C<ARRAY> will be discarded.  Think of it as documentation.
+
 =head1 BUGS AND LIMITATIONS
 
-Don't be discouraged by the long list of items here.  For the most part this
-module I<just works>.  If you are having problems, consult this list to see
-if it's covered here.
+For the most part this module I<just works>.  If you are having problems,
+consult this list to see if it's covered here.
 
 =over 4
 
@@ -437,6 +421,11 @@ In other words, don't do this:
 
  sub foo($bar) { ... }
  sub foo { ... }
+
+If you want something like that, name a L<Fallback> subroutine:
+
+ sub foo($bar) { ... }
+ sub foo(fallback) { ... }
 
 However, you don't need signatures on all subs.  This is OK:
 
@@ -494,27 +483,8 @@ in an infinite loop if you do that, so don't do that.
 
 See C<t/90prototypes.t> and the code at the end if you want to fix this.
 
-=item * How do we handle variadic subs?
-
-At the present time, all subs and methods must have a fixed number of
-arguments.  This may change in the future.
-
-=item * Signature types ignore C<isa> relationships.
-
-Properly a signature should be able to specify a type that an argument has
-an I<isa> relationship with.  This does not yet work.
-
- sub foo(ParentClass $bar) { ... }
-
- # later
-
- foo(SubClassOfParentClass->new); # should work, but doesn't
-
-If you need that behavior, don't use a signature for that subroutine or method.
-
-=item * lvalue subroutines?
-
-There is no support for them.  Patches welcome.
+Of course, prototypes in Perl are widely considered to be broken anyway, so why
+use them?
 
 =back
 
@@ -541,50 +511,43 @@ In loose mode, this becomes:
  package Some::Package;
 
  sub foo {
-     goto &_foo_SCALAR if 1 == @_;
-     goto &_foo_SCALAR_HASH if 2 == @_;
-     # die with a useful error message
+     goto &__foo_1 if 1 == @_;
+     goto &__foo_2 if 2 == @_;
+     # die with a useful error message unless we have a fallback subroutine
  }
 
- sub _foo_SCALAR { my ($bar) = @_;
+ sub __foo_1 { my ($bar) = @_;
      return [$bar];
  }
 
- sub _foo_SCALAR_HASH { my ($bar, $baz) = @_;
+ sub __foo_2 { my ($bar, $baz) = @_;
      return exists $baz->{$bar};
  }
 
-In strict the only difference is in how the dispatch subroutine is created.
-
- sub foo {
-     my $s = Sub::Signatures::_make_signature('Some::Package', @_);
-     no strict 'refs';
-     goto &{"_foo_$s"} if defined &{"_foo_$s"};
-     # die with a useful error message
- }
-
-The C<_make_signature> subroutine returns a signature like "SCALAR_HASH_DBI",
-etc., thus allowing for the type checking.
 
 There's a bit more magic involved when it comes to methods, particulary with
 trying to call an inherited method if one is not found in the current package.
 However, this should give you a rough idea of what's going on and also give you
-fair warning that deliberately naming subs things like
-C<_subname_TYPE_TYPE_ETC> is a bad thing.
+fair warning that deliberately naming subs things like C<_subname_$digit> is a
+bad thing.
 
 =head1 EXPORT
 
 None.
 
-=head1 HOW TO GET THIS BEYOND ALPHA
+=head1 BETA Code
 
-This is alpha code.  Many people understandably do not wish to use alpha code
-in production.  To get this code robust enough for production use, send me
-bug reports.  Send me patches.  Send me requests.  Send me feedback.
+This is beta code.  Many people understandably do not wish to use beta code
+in production.  To get this code robust enough for production use, send me bug
+reports.  Send me patches.  Send me requests.  Send me feedback.
 
-Naturally, since this is alpha code, the interface may change.  Hopefully I've
-not made any boneheaded mistakes that necessitate this, but I will not
-guarantee that I am not, in fact, boneheaded.
+Naturally, since this is beat code, the interface is probably stable.  I have
+no intention of changing it unless I need to.  Hopefully I've not made any
+boneheaded mistakes that necessitate this, but I will not guarantee that I am
+not, in fact, boneheaded.
+
+However, if you use this module, please let me know.  If things do change, I'd
+like to give folks a heads up.
 
 =head1 SEE ALSO
 
@@ -602,7 +565,7 @@ Reverse the name to email me.
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright 2004 by Curtis "Ovid" Poe
+Copyright 2004-2005 by Curtis "Ovid" Poe
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself. 

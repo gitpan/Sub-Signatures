@@ -3,14 +3,13 @@ use base 'ClassA';
 
 use strict;
 use warnings;
-use Sub::Signatures qw/strict methods/;
+use Sub::Signatures qw/methods/;
 
-sub match($class, $bar, Regexp $foo) {
+sub match($class, $bar, $foo) {
+    if ('ARRAY' eq ref $bar) {
+        return @$bar == grep $_ =~ $foo => @$bar;
+    }
     return $bar =~ $foo;
-}
-
-sub match($class, ARRAY $bar, Regexp $foo) {
-    return @$bar == grep $_ =~ $foo => @$bar;
 }
 
 1;

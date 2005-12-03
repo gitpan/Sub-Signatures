@@ -9,7 +9,7 @@ BEGIN
     chdir 't' if -d 't';
     unshift @INC => '../lib';
 }
-use Sub::Signatures;
+use Sub::Signatures qw/methods/;
 
 sub foo($class, $bar) {
     $bar;

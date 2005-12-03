@@ -2,16 +2,16 @@
 use ExtUtils::MakeMaker;
 WriteMakefile
 (
-  'PL_FILES' => {},
-  'INSTALLDIRS' => 'site',
   'NAME' => 'Sub::Signatures',
-  'EXE_FILES' => [],
   'VERSION_FROM' => 'lib/Sub/Signatures.pm',
   'PREREQ_PM' => {
-    'Test::More' => '0.6',
-    'Test::Exception' => '0.21',
     'Filter::Simple' => '0.78',
-    'Sub::Uplevel' => '0.09'
-  }
+    'Sub::Uplevel' => '0.09',
+    'Test::Exception' => '0.21',
+    'Test::More' => '0.6'
+  },
+  'INSTALLDIRS' => 'site',
+  'EXE_FILES' => [],
+  'PL_FILES' => {}
 )
 ;

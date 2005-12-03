@@ -3,7 +3,7 @@
 use warnings;
 use strict;
 
-use Test::More tests => 4;
+use Test::More tests => 6;
 #use Test::More 'no_plan';
 use Test::Exception;
 
@@ -32,3 +32,6 @@ is this( $object, [] ), 'arrayref with 0 elements',
 is_deeply this( $object, {} ), { this => 1 },
   '... but dispatching is handled manually';
 
+ok my $code = $object->subref(3),
+  'Methods which return anonymous subroutines should work';
+is $code->('Ovid'), "3 Ovid", '... and they should behave correctly';

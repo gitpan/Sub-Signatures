@@ -31,4 +31,10 @@ sub match($class, $bar) {
     $bar;
 }
 
+sub subref ($self, $foo) {
+    return sub ($bar) {
+        return "$foo $bar";
+    }
+}
+
 1;

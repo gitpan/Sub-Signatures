@@ -1,6 +1,6 @@
 ---
 name: Sub-Signatures
-version: 0.20
+version: 0.21
 author:
   - Curtis "Ovid" Poe <moc.oohay@eop_divo_sitruc>
 abstract: 'Use proper signatures for subroutines, including dispatching.'
@@ -16,5 +16,8 @@ build_requires:
 provides:
   Sub::Signatures:
     file: lib/Sub/Signatures.pm
-    version: 0.20
-generated_by: Module::Build version 0.2702
+    version: 0.21
+generated_by: Module::Build version 0.2703
+meta-spec:
+  url: http://module-build.sourceforge.net/META-spec-v1.2.html
+  version: 1.2

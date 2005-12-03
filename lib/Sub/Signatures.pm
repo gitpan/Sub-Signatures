@@ -1,6 +1,6 @@
 package Sub::Signatures;
 $REVISION = '$Id: Signatures.pm,v 1.3 2004/12/05 21:19:33 ovid Exp $';
-$VERSION  = '0.20';
+$VERSION  = '0.21';
 
 use 5.006;
 use strict;
@@ -87,11 +87,11 @@ my $install_subs = sub {
 };
 
 # each regex can capture itself!
-my $sub_name_re   = qr/([[:alpha:]][[:word:]]*)/;
+my $sub_name_re   = qr/([_[:alpha:]][[:word:]]*)/;
 my $parameters_re = qr/\(([^)]+)\)/;
-FILTER_ONLY code => sub {
+FILTER {
     warn "Calling package:  $CALLPACK ****" if $ENV{SS_DEBUG};
-    while (/(sub\s*$sub_name_re?\s*$parameters_re[^{]*{)/) {
+    while (/(sub\s+$sub_name_re?\s*$parameters_re[^{]*\{)/) {
         my ( $sub_with_sig, $oldname, $parameters ) = ( $1, $2, $3 );
 
         # the following line doesn't work.  For some reason, using prototypes
@@ -124,19 +124,16 @@ FILTER_ONLY code => sub {
             $newparams = $parameters;
         }
         if ($newparams) {
-            s/\Q$sub_with_sig\E/sub $newname { my ($newparams) = \@_;/;
+            s/\Q$sub_with_sig\E/sub $newname \{ my ($newparams) = \@_;/;
         }
         else {
-            s/\Q$sub_with_sig\E/sub $newname {/;
+            s/\Q$sub_with_sig\E/sub $newname \{/;
         }
     }
     $make_subs->();
     $install_subs->();
     print $_ if $ENV{SS_DEBUG};
 };
-
-INIT {
-}
 
 1;
 
@@ -298,6 +295,18 @@ class.
  
  1;
 
+=head2 Anonymous subroutines
+
+While multi-dispatch doesn't make much sense in the context of anonymous
+subroutines, we can still use subroutine signatures with them:
+
+ sub foo($bar) {
+   return sub ($this) { "$this $bar" }
+ }
+
+Also, though there is special handling for "methods", anonymous subroutines
+can be safely mixed with methods.
+
 =head1 FEATURES
 
 Currently supported features:
@@ -308,9 +317,45 @@ Currently supported features:
 
  use Sub::Signatures 'methods';
 
+Note that if you use 'methods', you cannot use signatures with subroutines
+which are called in a non-Object-Oriented fashion.
+
+ use Sub::Signatures 'methods';
+
+ sub _reverse_text { # must not have signature
+   my $text = shift;
+   return scalar reverse $text;
+ }
+
+ sub new ($class) {
+    bless {}, $class;
+ }
+
+ sub new ($class, $data) {
+    die "Argument to new() must be a hashref'
+      unless ref $data eq 'HASH';
+    bless $data, $class;
+ }
+ 
+ sub name ($self) {
+    return $self->{name};
+ }
+
+ sub name ($self, $name) {
+    $self->{name} = $name;
+ }
+ 
 =item * Subroutines
 
  use Sub::Signatures;
+
+ sub foo ($data) {
+   ...
+ }
+
+ sub foo ($arg1, $arg2) {
+   ...
+ }
 
 =item * Exporting
 
@@ -332,11 +377,12 @@ Currently supported features:
  
 =item * Inheritance
 
-=item * Anonymous subroutines
+ use Sub::Signatures 'methods';
 
-These mostly work, but there are limitations.  Signature-based dispatch does
-not make much sense in this context, so it's not available.  The only point is
-to be able to declare your anonymous subs with variables:
+Specifying C<methods> allows C<Sub::Signatures> to call your method correctly
+rather than call it as a subroutine.
+
+=item * Anonymous subroutines
 
  my $thingy = sub ($foo, $bar) { ... };
 
@@ -400,8 +446,6 @@ as simple as possible, we restrict ourselves to dispatching on the number of
 arguments.  Thus, you, the programmer, will still need to validate the
 different types and/or capabilities of the arguments you pass in.
 
-Sorry about that :/
-
 If you prefer, you can still list the data type before the argument:
 
   sub foo (ARRAY $bar) {...}
@@ -414,6 +458,14 @@ For the most part this module I<just works>.  If you are having problems,
 consult this list to see if it's covered here.
 
 =over 4
+
+=item * "sub foo {}"
+
+Due to limitations with parsing Perl, this module does I<not> attempt to take
+advantage of C<Filter::Simple>'s "FILTER_ONLY" functionality.  This means that
+this module is a straightforward filter.  As a result, if you have text in
+quoted areas which resembles "signified" subroutines, you may see strange
+results.  Fortunately, this is very rare.
 
 =item * Do not mix "signatured" subs with "non-signatured" of the same name
 
@@ -500,7 +552,7 @@ works like this:
      return [$bar];
  }
  
- sub foo($bar, HASH $baz) {
+ sub foo($bar, $baz) {
      return exists $baz->{$bar};
  }
  
@@ -524,7 +576,6 @@ In loose mode, this becomes:
      return exists $baz->{$bar};
  }
 
-
 There's a bit more magic involved when it comes to methods, particulary with
 trying to call an inherited method if one is not found in the current package.
 However, this should give you a rough idea of what's going on and also give you
@@ -535,13 +586,13 @@ bad thing.
 
 None.
 
-=head1 BETA Code
+=head1 BETA CODE
 
 This is beta code.  Many people understandably do not wish to use beta code
 in production.  To get this code robust enough for production use, send me bug
 reports.  Send me patches.  Send me requests.  Send me feedback.
 
-Naturally, since this is beat code, the interface is probably stable.  I have
+Naturally, since this is beta code, the interface is probably stable.  I have
 no intention of changing it unless I need to.  Hopefully I've not made any
 boneheaded mistakes that necessitate this, but I will not guarantee that I am
 not, in fact, boneheaded.
@@ -556,6 +607,12 @@ L<Filter::Simple>
 Yes, this is based on a source filter.  If you can't stand that, don't use this
 module.  However, before you ignore it, read 
 L<http://use.perl.org/~Ovid/journal/22152>.
+
+L<Attribute::Signature>
+
+L<Perl6::Subs>
+
+L<Perl6::Parameters>
 
 =head1 AUTHOR
 
